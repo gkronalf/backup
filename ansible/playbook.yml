@@ -34,42 +34,19 @@
   become: true
 
   tasks:
-    - name: "Create directory .ssh"
-      ansible.builtin.file:
-        path: /home/borg/.ssh/
-        mode: '0700'
-        state: directory
 
     - name: "Ssh-keygen"
       ansible.builtin.user:
-        name: borg
+        name: root
         generate_ssh_key: yes
         ssh_key_bits: 2048
-        ssh_key_file: ~/.ssh/id_rsa
-
-    # - name: "Ssh-keygen"
-    #   shell: "cd /home/borg/.ssh/ \ ssh-keygen"
+        ssh_key_file: .ssh/id_rsa
 
     - name: "Copy ssh-key on server"
       fetch:
         src: /root/.ssh/id_rsa.pub
         dest: ./key/id_rsa.pub
         flat: true
-
-    # - name: "Mount remote directory /var/backup"
-    #   shell: "borg init --encryption=repokey borg@192.168.11.160:/var/backup/"
-    
-    # - name: "Mount remote directory /var/backup"
-    #   ansible.posix.mount:
-    #     src: 192.168.11.160:/var/backup
-    #     path: /mnt/backup
-    #     opts: rw,sync,hard
-    #     state: mounted
-    #     fstype: nfs
-
-    # # - name: "Install borg"
-    # #   shell: 
-
 
 - name: "Settings backup-server"
   hosts: "backup_server"
@@ -88,23 +65,24 @@
         fstype: ext4
         state: mounted
 
-    # - name: "Add user borg"
-    #   user: 
-    #     name: borg
-    #     shell: /bin/bash
-    #     append: yes
-
     - name: "Creates directory /var/backup"
       ansible.builtin.file:
         path: /var/backup
         owner: borg
         group: borg
-        mode: '0644'
+        mode: '0777'
         state: directory
+
+    - name: "Preparing the repository"
+      ansible.builtin.file:
+        state: absent
+        path: /var/backup/lost+found
 
     - name: "Create directory .ssh"
       ansible.builtin.file:
         path: /home/borg/.ssh/
+        owner: borg
+        group: borg
         mode: '0700'
         state: directory
     
@@ -116,23 +94,56 @@
         mode: '0600'
         state: touch
 
-    # - name: "Create directory .ssh"
-    #   ansible.builtin.user:
-    #     name: borg
-    #     generate_ssh_key: yes
-    #     ssh_key_bits: 2048
-    #     ssh_key_file: /home/borg/.ssh/id_rsa
-    
-    # - name: "Copy ssh-key"
-    #   fetch:
-    #     src: /home/borg/.ssh/id_rsa.pub
-    #     dest: ./key/id_rsa.pub
-    #     flat: true
     - name: "Copy ssh-key"
       copy:
         src: ./key/id_rsa.pub
-        dest: /home/borg/.ssh/me.pub
+        dest: /home/borg/.ssh/borg.pub
 
     - name: "Add ssh-key into authorized_keys"
-      shell: "cat /home/borg/.ssh/me.pub >> /home/borg/.ssh/authorized_keys"
+      shell: "cat /home/borg/.ssh/borg.pub >> /home/borg/.ssh/authorized_keys"
       
+- name: "Init borg-repo on backup-client"
+  hosts: "clients"
+  become: true
+
+  tasks:
+    - name: "Add config file for .ssh"
+      ansible.builtin.file:
+        path: /root/.ssh/config
+        owner: root
+        group: root
+        mode: '0644'
+        state: touch
+
+    - name: "Setting config file .ssh/config"
+      shell: "echo 'Host *\n  StrictHostKeyChecking no\n  LogLevel quiet' > /root/.ssh/config"
+
+    - name: "Restart ssh"
+      service:
+        name: sshd
+        state: restarted
+
+    - name: "Mount remote directory /var/backup"
+      shell: "borg init --encryption=repokey borg@192.168.11.160:/var/backup/"
+      environment:
+        BORG_PASSPHRASE: Otus1234
+
+    - name: "Create service borgbackup"
+      ansible.builtin.copy:
+        src: ./files/borg-backup.service
+        dest: /etc/systemd/system/borg-backup.service
+
+    - name: "Create timer borgbackup"
+      ansible.builtin.copy:
+        src: ./files/borg-backup.timer
+        dest: /etc/systemd/system/borg-backup.timer
+
+    - name: "Enabled borg-backup.timer"
+      ansible.builtin.service:
+        name: borg-backup.timer
+        enabled: yes
+
+    - name: "Started borg-backup.timer"
+      ansible.builtin.service:
+        name: borg-backup.timer
+        state: started
